@@ -30,6 +30,7 @@ var (
 	normalizedScalePtr = flag.Float64("normalized-scale", 50.0, "Scale factor for amplifying differences in normalized mode (default: 50.0)")
 	diffModePtr        = flag.String("diff-mode", "color", "Difference mode: 'bw' (black-and-white), 'gray' (grayscale), 'color' (default)")
 	verbosePtr         = flag.Bool("verbose", false, "Enable verbose logging")
+	gitConfigPtr       = flag.String("git-config", "", "Configure imagediff as git difftool: 'enable' or 'disable'")
 )
 
 type ImageStats struct {
@@ -306,6 +307,72 @@ func createCompositeImage(img1, img2, diffImg image.Image) image.Image {
 	return composite
 }
 
+func configureGitDifftool(enable bool, verbose bool) {
+	toolName := "imagediff"
+	binaryPath, err := os.Executable()
+	if err != nil {
+		if verbose {
+			log.Printf("Error getting executable path: %v", err)
+		} else {
+			fmt.Printf("Error getting executable path: %v\n", err)
+		}
+		os.Exit(1)
+	}
+
+	if enable {
+		if verbose {
+			log.Printf("Enabling imagediff as git difftool with path: %s", binaryPath)
+		}
+		cmd := exec.Command("git", "config", "--global", "diff.tool", toolName)
+		if err := cmd.Run(); err != nil {
+			if verbose {
+				log.Printf("Error setting diff.tool: %v", err)
+			} else {
+				fmt.Printf("Error setting diff.tool: %v\n", err)
+			}
+			os.Exit(1)
+		}
+
+		cmdStr := fmt.Sprintf("%s -left \"$LOCAL\" -right \"$REMOTE\" -wait", binaryPath)
+		cmd = exec.Command("git", "config", "--global", fmt.Sprintf("difftool.%s.cmd", toolName), cmdStr)
+		if err := cmd.Run(); err != nil {
+			if verbose {
+				log.Printf("Error setting difftool.%s.cmd: %v", toolName, err)
+			} else {
+				fmt.Printf("Error setting difftool.%s.cmd: %v\n", toolName, err)
+			}
+			os.Exit(1)
+		}
+
+		fmt.Println("imagediff successfully enabled as git difftool")
+	} else {
+		if verbose {
+			log.Printf("Disabling imagediff as git difftool")
+		}
+		cmd := exec.Command("git", "config", "--global", "--unset", "diff.tool")
+		if err := cmd.Run(); err != nil && err.Error() != "exit status 5" { // 5 means key not found, which is fine
+			if verbose {
+				log.Printf("Error unsetting diff.tool: %v", err)
+			} else {
+				fmt.Printf("Error unsetting diff.tool: %v\n", err)
+			}
+			os.Exit(1)
+		}
+
+		cmd = exec.Command("git", "config", "--global", "--unset", fmt.Sprintf("difftool.%s.cmd", toolName))
+		if err := cmd.Run(); err != nil && err.Error() != "exit status 5" {
+			if verbose {
+				log.Printf("Error unsetting difftool.%s.cmd: %v", toolName, err)
+			} else {
+				fmt.Printf("Error unsetting difftool.%s.cmd: %v\n", toolName, err)
+			}
+			os.Exit(1)
+		}
+
+		fmt.Println("imagediff successfully disabled as git difftool")
+	}
+}
+
 // printUsageWithExamples prints the standard flag usage followed by example runs
 func printUsageWithExamples() {
 	flag.CommandLine.SetOutput(os.Stderr) // Ensure usage goes to stderr
@@ -318,6 +385,8 @@ func printUsageWithExamples() {
 	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -normalized -diff-mode gray -normalized-scale 25.0\n", exe)
 	fmt.Fprintf(os.Stderr, "  Composite output with verbose logging:\n")
 	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -include-inputs -verbose\n", exe)
+	fmt.Fprintf(os.Stderr, "  Configure as git difftool:\n")
+	fmt.Fprintf(os.Stderr, "    %s -git-config enable\n", exe)
 	fmt.Fprintf(os.Stderr, "\n")
 }
 
@@ -327,6 +396,21 @@ func main() {
 
 	if *verbosePtr {
 		log.SetFlags(log.LstdFlags | log.Lshortfile) // Include timestamp and file:line
+	}
+
+	// Handle git-config flag
+	if *gitConfigPtr != "" {
+		if *gitConfigPtr == "enable" {
+			configureGitDifftool(true, *verbosePtr)
+			os.Exit(0)
+		} else if *gitConfigPtr == "disable" {
+			configureGitDifftool(false, *verbosePtr)
+			os.Exit(0)
+		} else {
+			log.Printf("Error: Invalid -git-config value '%s'. Use 'enable' or 'disable'.", *gitConfigPtr)
+			printUsageWithExamples()
+			os.Exit(1)
+		}
 	}
 
 	if *leftPtr == "" || *rightPtr == "" {

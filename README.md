@@ -67,6 +67,10 @@ imagediff -left <left-image.png> -right <right-image.png>
   - `gray`: Grayscale difference.
   - `bw`: Black-and-white difference.
 
+- `-git-config <mode>`: Configure `imagediff` as git difftool:
+  - `enable`: Sets `imagediff` as the git difftool.
+  - `disable`: Removes `imagediff` from git difftool configuration.
+
 - `-include-inputs`: Include input images in the output (left and right of diff).
 
 - `-normalized`: Use normalized difference (adjusts for brightness/contrast).
@@ -98,6 +102,12 @@ imagediff -left image1.png -right image2.png -normalized -diff-mode bw -include-
 
 # Wait for viewer with verbose output
 imagediff -left image1.png -right image2.png -wait -verbose
+
+# Enable imagediff as git difftool
+imagediff -git-config enable -verbose
+
+# Disable imagediff as git difftool
+imagediff -git-config disable
 ```
 
 **The output message varies by mode**:
@@ -129,6 +139,8 @@ Run `imagediff -h` to see the full help:
 Usage of imagediff:
   -diff-mode string
         Difference mode: 'bw' (black-and-white), 'gray' (grayscale), 'color' (default) (default "color")
+  -git-config string
+        Configure imagediff as git difftool: 'enable' or 'disable'
   -include-inputs
         Include input images in output (left and right of diff)
   -left string
@@ -157,6 +169,8 @@ Examples:
     imagediff -left image1.png -right image2.png -normalized -diff-mode gray -normalized-scale 25.0
   Composite output with verbose logging:
     imagediff -left image1.png -right image2.png -include-inputs -verbose
+  Configure as git difftool:
+    imagediff -git-config enable
 ```
 
 ## Setup with Git `difftool`
@@ -217,6 +231,19 @@ You can configure `imagediff` as a custom diff tool in Git to visually compare i
      ```bash
      git difftool --staged <image-file>
      ```
+
+### Alternatively, use the built-in flag to configure:
+
+```bash
+# Enable
+# This configures: imagediff -left "$LOCAL" -right "$REMOTE" -wait -verbose
+imagediff -git-config enable -verbose
+
+# Disable
+imagediff -git-config disable
+```
+
+This modifies your global `.gitconfig` automatically, using the binary's current path.
 
 ### Notes
 
