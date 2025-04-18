@@ -430,3 +430,121 @@ func TestLuminosityModeWithDifferentColors(t *testing.T) {
 		t.Fatalf("Failed to run imagediff with different color channels: %v\nOutput: %s", err, output)
 	}
 }
+
+func TestAllDiffModes(t *testing.T) {
+	width, height := 100, 100
+
+	// Create base image (gray)
+	baseImg := createTestImage(width, height, color.RGBA{128, 128, 128, 255})
+	baseFile := saveTestImage(t, baseImg)
+	defer os.Remove(baseFile)
+
+	// Create slightly different image (slightly lighter)
+	diffImg := createTestImage(width, height, color.RGBA{132, 132, 132, 255})
+	diffFile := saveTestImage(t, diffImg)
+	defer os.Remove(diffFile)
+
+	// Test each diff mode
+	modes := []string{"bw", "gray", "luminosity", "color"}
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			// Test default scale
+			output, err := runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", mode)
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode: %v\nOutput: %s", mode, err, output)
+			}
+
+			// Test explicit scale
+			output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", mode, "-scale", "2.0")
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode and explicit scale: %v\nOutput: %s", mode, err, output)
+			}
+
+			// Test with normalized mode
+			output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", mode, "-normalized")
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode and normalized: %v\nOutput: %s", mode, err, output)
+			}
+
+			// Test with composite output
+			output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", mode, "-include-inputs")
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode and composite output: %v\nOutput: %s", mode, err, output)
+			}
+		})
+	}
+
+	// Test with very small differences
+	smallDiffImg := createTestImage(width, height, color.RGBA{129, 129, 129, 255})
+	smallDiffFile := saveTestImage(t, smallDiffImg)
+	defer os.Remove(smallDiffFile)
+
+	for _, mode := range modes {
+		t.Run(mode+"_small_diff", func(t *testing.T) {
+			output, err := runImagediff(t, "-left", baseFile, "-right", smallDiffFile, "-diff-mode", mode)
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode and small differences: %v\nOutput: %s", mode, err, output)
+			}
+		})
+	}
+
+	// Test with larger differences
+	largeDiffImg := createTestImage(width, height, color.RGBA{200, 200, 200, 255})
+	largeDiffFile := saveTestImage(t, largeDiffImg)
+	defer os.Remove(largeDiffFile)
+
+	for _, mode := range modes {
+		t.Run(mode+"_large_diff", func(t *testing.T) {
+			output, err := runImagediff(t, "-left", baseFile, "-right", largeDiffFile, "-diff-mode", mode)
+			if err != nil {
+				t.Errorf("Failed to run imagediff with %s mode and large differences: %v\nOutput: %s", mode, err, output)
+			}
+		})
+	}
+
+	// Test with different colors
+	colorTests := []struct {
+		name string
+		img1 color.RGBA
+		img2 color.RGBA
+		desc string
+	}{
+		{
+			name: "red_to_darker_red",
+			img1: color.RGBA{200, 0, 0, 255},
+			img2: color.RGBA{190, 0, 0, 255},
+			desc: "similar colors, different brightness",
+		},
+		{
+			name: "red_to_green",
+			img1: color.RGBA{200, 0, 0, 255},
+			img2: color.RGBA{0, 200, 0, 255},
+			desc: "different colors, similar perceived brightness",
+		},
+		{
+			name: "white_to_black",
+			img1: color.RGBA{255, 255, 255, 255},
+			img2: color.RGBA{0, 0, 0, 255},
+			desc: "maximum contrast",
+		},
+	}
+
+	for _, ct := range colorTests {
+		colorImg1 := createTestImage(width, height, ct.img1)
+		colorFile1 := saveTestImage(t, colorImg1)
+		defer os.Remove(colorFile1)
+
+		colorImg2 := createTestImage(width, height, ct.img2)
+		colorFile2 := saveTestImage(t, colorImg2)
+		defer os.Remove(colorFile2)
+
+		for _, mode := range modes {
+			t.Run(mode+"_"+ct.name, func(t *testing.T) {
+				output, err := runImagediff(t, "-left", colorFile1, "-right", colorFile2, "-diff-mode", mode)
+				if err != nil {
+					t.Errorf("Failed to run imagediff with %s mode and %s: %v\nOutput: %s", mode, ct.desc, err, output)
+				}
+			})
+		}
+	}
+}
