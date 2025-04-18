@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
 
 // Global flag pointer variables
 var (
+	extPtr             = flag.String("ext", "", "Skip files not matching extension")
 	leftPtr            = flag.String("left", "", "Left input image file (required)")
 	rightPtr           = flag.String("right", "", "Right input image file (required)")
 	outputPtr          = flag.String("output", "", "Output image file (default: temporary file)")
@@ -28,9 +30,10 @@ var (
 	normalizedPtr      = flag.Bool("normalized", false, "Use normalized difference (adjusts for brightness/contrast)")
 	scalePtr           = flag.Float64("scale", 2.0, "Scale factor for amplifying differences in non-normalized mode (default: 2.0)")
 	normalizedScalePtr = flag.Float64("normalized-scale", 50.0, "Scale factor for amplifying differences in normalized mode (default: 50.0)")
-	diffModePtr        = flag.String("diff-mode", "color", "Difference mode: 'bw' (black-and-white), 'gray' (grayscale), 'color' (default)")
+	diffModePtr        = flag.String("diff-mode", "color", "Difference mode: 'bw' (black-and-white), 'gray' (grayscale average), 'luminosity' (perceived brightness), 'color' (RGB, default)")
 	verbosePtr         = flag.Bool("verbose", false, "Enable verbose logging")
 	gitConfigPtr       = flag.String("git-config", "", "Configure imagediff as git difftool: 'enable' or 'disable'")
+	openDiffPtr        = flag.Bool("open-diff", true, "Open the diff image after creation (default: true)")
 )
 
 type ImageStats struct {
@@ -171,6 +174,19 @@ func computeDiffChunk(img1, img2 image.Image, diffImg *image.RGBA, chunk Chunk, 
 				avgDiff := (rDiff + gDiff + bDiff) / 3.0
 				gray := uint8(min(avgDiff*scaleFactor, 255))
 				r, g, b = gray, gray, gray
+			case "luminosity":
+				// Luminosity-based difference using standard coefficients
+				lumDiff := (0.299*rDiff + 0.587*gDiff + 0.114*bDiff)
+				// Make small differences more visible by adding a minimum threshold
+				// and amplifying small values
+				if lumDiff > 0 {
+					// Add a small constant to make tiny differences visible
+					lumDiff = lumDiff + 0.1
+					// Amplify small values more than large ones
+					lumDiff = lumDiff * (1.0 + 2.0*lumDiff)
+				}
+				gray := uint8(min(lumDiff*scaleFactor, 255))
+				r, g, b = gray, gray, gray
 			case "color":
 				// RGB difference
 				r = uint8(min(rDiff*scaleFactor, 255))
@@ -248,9 +264,9 @@ func openImage(filename, viewer string, wait, verbose bool) error {
 	switch runtime.GOOS {
 	case "darwin": // macOS
 		if wait {
-			cmd = exec.Command("open", "-W", filename)
+			cmd = exec.Command("open", "-a", "-W", filename)
 		} else {
-			cmd = exec.Command("open", filename)
+			cmd = exec.Command("open", "-a", filename)
 		}
 	case "linux": // Linux
 		if wait {
@@ -383,11 +399,25 @@ func printUsageWithExamples() {
 	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png\n", exe)
 	fmt.Fprintf(os.Stderr, "  Normalized grayscale difference with custom scale:\n")
 	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -normalized -diff-mode gray -normalized-scale 25.0\n", exe)
+	fmt.Fprintf(os.Stderr, "  Luminosity-based difference:\n")
+	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -diff-mode luminosity\n", exe)
 	fmt.Fprintf(os.Stderr, "  Composite output with verbose logging:\n")
 	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -include-inputs -verbose\n", exe)
+	fmt.Fprintf(os.Stderr, "  Create diff without opening it:\n")
+	fmt.Fprintf(os.Stderr, "    %s -left image1.png -right image2.png -open-diff=false\n", exe)
 	fmt.Fprintf(os.Stderr, "  Configure as git difftool:\n")
 	fmt.Fprintf(os.Stderr, "    %s -git-config enable\n", exe)
 	fmt.Fprintf(os.Stderr, "\n")
+}
+
+// Helper function to check if a flag was explicitly set in os.Args
+func isFlagSet(name string) bool {
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "-"+name || os.Args[i] == "--"+name {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -421,11 +451,21 @@ func main() {
 
 	if *verbosePtr {
 		log.Printf("Starting imagediff with left=%s, right=%s", *leftPtr, *rightPtr)
+	} else {
+		fmt.Printf("Left  %s\n", *leftPtr)
+		fmt.Printf("Right %s\n", *rightPtr)
+	}
+
+	if *extPtr != "" {
+		if !strings.HasSuffix(*leftPtr, *extPtr) || !strings.HasSuffix(*rightPtr, *extPtr) {
+			fmt.Printf("Skip files not matching extension %q\n\n", *extPtr)
+			os.Exit(0)
+		}
 	}
 
 	// Validate diffMode
-	if *diffModePtr != "bw" && *diffModePtr != "gray" && *diffModePtr != "color" {
-		log.Printf("Error: Invalid -diff-mode value '%s'. Use 'bw', 'gray', or 'color'.", *diffModePtr)
+	if *diffModePtr != "bw" && *diffModePtr != "gray" && *diffModePtr != "color" && *diffModePtr != "luminosity" {
+		log.Printf("Error: Invalid -diff-mode value '%s'. Use 'bw', 'gray', 'color', or 'luminosity'.", *diffModePtr)
 		printUsageWithExamples()
 		os.Exit(1)
 	}
@@ -505,6 +545,10 @@ func main() {
 	scaleFactor := *scalePtr
 	if *normalizedPtr {
 		scaleFactor = *normalizedScalePtr
+	}
+	// Use scale factor of 1.0 for luminosity mode if scale was not explicitly set
+	if *diffModePtr == "luminosity" && !isFlagSet("scale") {
+		scaleFactor = 1.0
 	}
 
 	numCPU := runtime.NumCPU()
@@ -620,23 +664,27 @@ func main() {
 		outputMode = "Black-and-White"
 	} else if *diffModePtr == "gray" {
 		outputMode = "Grayscale"
+	} else if *diffModePtr == "luminosity" {
+		outputMode = "Luminosity"
 	}
-	fmt.Printf("%s%s difference image successfully created with scale factor %.1f: %s%s\n", diffType, outputMode, scaleFactor, outputFile, diffMsg)
+	fmt.Printf("%s%s difference image successfully created with scale factor %.1f: %s%s\n\n", diffType, outputMode, scaleFactor, outputFile, diffMsg)
 
-	err = openImage(outputFile, *viewerPtr, *waitPtr, *verbosePtr)
-	if err != nil {
-		if *verbosePtr {
-			log.Printf("Error opening image: %v", err)
-		} else {
-			fmt.Printf("Error opening image: %v\n", err)
+	if *openDiffPtr {
+		err = openImage(outputFile, *viewerPtr, *waitPtr, *verbosePtr)
+		if err != nil {
+			if *verbosePtr {
+				log.Printf("Error opening image: %v", err)
+			} else {
+				fmt.Printf("Error opening image: %v\n", err)
+			}
+			os.Exit(1)
 		}
-		os.Exit(1)
-	}
-	if *verbosePtr {
-		if *waitPtr {
-			fmt.Println("Image viewer closed")
-		} else {
-			fmt.Println("Image opened in", getViewerName(*viewerPtr))
+		if *verbosePtr {
+			if *waitPtr {
+				fmt.Println("Image viewer closed")
+			} else {
+				fmt.Println("Image opened in", getViewerName(*viewerPtr))
+			}
 		}
 	}
 }

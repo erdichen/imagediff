@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/png"
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
 
 // Helper function to create a test image with solid color
-func createTestImage(width, height int, c color.Color) image.Image {
+func createTestImage(width, height int, c color.Color) *image.RGBA {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := range height {
 		for x := range width {
@@ -314,4 +316,117 @@ func TestPrintUsageWithExamples(t *testing.T) {
 // Helper function for approximate float comparison
 func approxEqual(a, b, tol float64) bool {
 	return math.Abs(a-b) <= tol
+}
+
+// saveTestImage saves an image to a temporary file and returns its path
+func saveTestImage(t *testing.T, img image.Image) string {
+	tmpfile, err := os.CreateTemp("", "test-*.png")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer tmpfile.Close()
+
+	if err := png.Encode(tmpfile, img); err != nil {
+		t.Fatalf("Failed to encode image: %v", err)
+	}
+
+	return tmpfile.Name()
+}
+
+// runImagediff runs the imagediff command with the given arguments and returns the output
+func runImagediff(_ *testing.T, args ...string) (string, error) {
+	cmd := exec.Command("go", "run", "imagediff.go", "-open-diff=false")
+	cmd.Args = append(cmd.Args, args...)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+func TestLuminosityMode(t *testing.T) {
+	// Create test images
+	width, height := 100, 100
+
+	// Create base image (gray)
+	baseImg := createTestImage(width, height, color.RGBA{128, 128, 128, 255})
+	baseFile := saveTestImage(t, baseImg)
+	defer os.Remove(baseFile)
+
+	// Create slightly different image (slightly lighter)
+	diffImg := createTestImage(width, height, color.RGBA{132, 132, 132, 255})
+	diffFile := saveTestImage(t, diffImg)
+	defer os.Remove(diffFile)
+
+	// Test default scale (should be 1.0 for luminosity mode)
+	output, err := runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", "luminosity")
+	if err != nil {
+		t.Errorf("Failed to run imagediff: %v\nOutput: %s", err, output)
+	}
+
+	// Test explicit scale
+	output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", "luminosity", "-scale", "2.0")
+	if err != nil {
+		t.Errorf("Failed to run imagediff with explicit scale: %v\nOutput: %s", err, output)
+	}
+
+	// Test with normalized mode
+	output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", "luminosity", "-normalized")
+	if err != nil {
+		t.Errorf("Failed to run imagediff with normalized mode: %v\nOutput: %s", err, output)
+	}
+
+	// Test with composite output
+	output, err = runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", "luminosity", "-include-inputs")
+	if err != nil {
+		t.Errorf("Failed to run imagediff with composite output: %v\nOutput: %s", err, output)
+	}
+
+	// Test with very small differences
+	smallDiffImg := createTestImage(width, height, color.RGBA{129, 129, 129, 255})
+	smallDiffFile := saveTestImage(t, smallDiffImg)
+	defer os.Remove(smallDiffFile)
+
+	output, err = runImagediff(t, "-left", baseFile, "-right", smallDiffFile, "-diff-mode", "luminosity")
+	if err != nil {
+		t.Errorf("Failed to run imagediff with small differences: %v\nOutput: %s", err, output)
+	}
+
+	// Test with larger differences
+	largeDiffImg := createTestImage(width, height, color.RGBA{200, 200, 200, 255})
+	largeDiffFile := saveTestImage(t, largeDiffImg)
+	defer os.Remove(largeDiffFile)
+
+	output, err = runImagediff(t, "-left", baseFile, "-right", largeDiffFile, "-diff-mode", "luminosity")
+	if err != nil {
+		t.Errorf("Failed to run imagediff with large differences: %v\nOutput: %s", err, output)
+	}
+}
+
+func TestLuminosityModeWithDifferentColors(t *testing.T) {
+	width, height := 100, 100
+
+	// Create base image (red)
+	baseImg := createTestImage(width, height, color.RGBA{200, 0, 0, 255})
+	baseFile := saveTestImage(t, baseImg)
+	defer os.Remove(baseFile)
+
+	// Create slightly different image (slightly darker red)
+	diffImg := createTestImage(width, height, color.RGBA{190, 0, 0, 255})
+	diffFile := saveTestImage(t, diffImg)
+	defer os.Remove(diffFile)
+
+	// Test luminosity mode with different colors but similar brightness
+	output, err := runImagediff(t, "-left", baseFile, "-right", diffFile, "-diff-mode", "luminosity")
+	if err != nil {
+		t.Fatalf("Failed to run imagediff with different colors: %v\nOutput: %s", err, output)
+	}
+
+	// Test with very different colors but similar perceived brightness
+	// Red (200,0,0) and Green (0,200,0) have similar perceived brightness
+	greenImg := createTestImage(width, height, color.RGBA{0, 200, 0, 255})
+	greenFile := saveTestImage(t, greenImg)
+	defer os.Remove(greenFile)
+
+	output, err = runImagediff(t, "-left", baseFile, "-right", greenFile, "-diff-mode", "luminosity")
+	if err != nil {
+		t.Fatalf("Failed to run imagediff with different color channels: %v\nOutput: %s", err, output)
+	}
 }
